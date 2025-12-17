@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { ProcessedStudent, GlobalSettings, SchoolClass, StudentData } from '../types';
 import EditableField from './EditableField';
-import { DAYCARE_SKILLS, DAYCARE_SUBJECTS } from '../constants';
+import { DAYCARE_SKILLS, DAYCARE_SUBJECTS, EC_CORE_SCALE_3_POINT, INDICATOR_SCALE_3_POINT } from '../constants';
 import { getDaycareGrade } from '../utils';
 
 interface DaycareReportCardProps {
@@ -18,6 +18,21 @@ const DaycareReportCard: React.FC<DaycareReportCardProps> = ({ student, settings
   const [isGenerating, setIsGenerating] = useState(false);
 
   const activeIndicatorsList = settings.activeIndicators || DAYCARE_SKILLS;
+  
+  // Custom subjects added via "Learning Area / Subject" are treated as scored subjects.
+  const customSubjects = settings.customSubjects || [];
+  const scoredSubjects = [...DAYCARE_SUBJECTS, ...customSubjects];
+
+  // Filter student subjects to show in the first section (Learning Areas) if they are standard OR custom scored subjects
+  const coreSubjectsDisplay = student.subjects.filter(sub => scoredSubjects.includes(sub.subject));
+
+  // Filter indicators to ensure none of the scored subjects appear in the second section
+  const indicatorsDisplay = activeIndicatorsList.filter(ind => !scoredSubjects.includes(ind));
+
+  // Get Grading Configs or defaults
+  const gradingConfig = settings.earlyChildhoodGrading || { core: EC_CORE_SCALE_3_POINT, indicators: INDICATOR_SCALE_3_POINT };
+  const coreRanges = gradingConfig.core.ranges;
+  const indicatorRanges = gradingConfig.indicators.ranges;
 
   const handleSharePDF = async () => {
     setIsGenerating(true);
@@ -201,62 +216,75 @@ const DaycareReportCard: React.FC<DaycareReportCardProps> = ({ student, settings
 
        <h3 className="text-center font-bold uppercase mb-2 bg-blue-100 p-1 border border-blue-200">Skill Achievement(s) Remarks</h3>
 
-       {/* Main Table */}
-       <div className="flex-1 border border-gray-800 mb-4 flex flex-col">
-           {/* Header Row */}
-           <div className="flex bg-gray-200 font-bold text-xs uppercase border-b border-gray-800">
-               <div className="flex-1 p-2 border-r border-gray-600">Learning Areas / Skills</div>
-               <div className="w-10 p-2 text-center border-r border-gray-600 bg-white" title="Developing">D</div>
-               <div className="w-10 p-2 text-center border-r border-gray-600 bg-gray-100" title="Achieved">A</div>
-               <div className="w-10 p-2 text-center bg-gray-300" title="Advanced">A+</div>
+       {/* Main Content - Split into two tables for flexibility with different scales */}
+       <div className="flex-1 mb-4 flex flex-col gap-4">
+           
+           {/* 1. Learning Areas (Subjects) Table */}
+           <div className="border border-gray-800">
+               <div className="bg-gray-200 font-bold text-xs uppercase border-b border-gray-800 p-1 text-center">
+                   Learning Areas / Subjects
+               </div>
+               {/* Dynamic Header for Subjects */}
+               <div className="flex font-bold text-[10px] uppercase border-b border-gray-800 bg-gray-50">
+                   <div className="flex-1 p-2 border-r border-gray-600">Subject</div>
+                   {coreRanges.map(range => (
+                       <div key={range.grade} className="w-10 p-2 text-center border-r border-gray-600 last:border-0" title={range.remark}>
+                           {range.grade}
+                       </div>
+                   ))}
+               </div>
+               
+               {/* Subject Rows */}
+               {coreSubjectsDisplay.map(sub => {
+                   // Calculate grade using the CONFIG passed from settings
+                   const { grade, remark } = getDaycareGrade(sub.score, gradingConfig.core);
+                   return (
+                       <div key={sub.subject} className="flex border-b border-gray-400 text-xs last:border-0">
+                           <div className="flex-1 p-2 border-r border-gray-600 font-bold uppercase">
+                               {sub.subject}
+                               <span className="block font-normal italic text-[10px] text-gray-500">{remark}</span>
+                           </div>
+                           {/* Dynamic Checkmark Cells */}
+                           {coreRanges.map(range => (
+                               <div key={range.grade} className="w-10 p-2 text-center border-r border-gray-600 last:border-0 flex justify-center items-center">
+                                   {grade === range.grade ? '✔' : ''}
+                               </div>
+                           ))}
+                       </div>
+                   );
+               })}
            </div>
 
-           {/* Subjects (Scores translated to Grades) - FILTERED TO ONLY CORE 4 */}
-           {student.subjects.filter(sub => DAYCARE_SUBJECTS.includes(sub.subject)).map(sub => {
-               const { grade, remark } = getDaycareGrade(sub.score);
-               return (
-                   <div key={sub.subject} className="flex border-b border-gray-400 text-xs">
-                       <div className="flex-1 p-2 border-r border-gray-600 font-bold uppercase">
-                           {sub.subject}
-                           <span className="block font-normal italic text-[10px] text-gray-500">{remark}</span>
+           {/* 2. Developmental Skills (Indicators) Table */}
+           <div className="border border-gray-800">
+                <div className="bg-gray-100 p-1 font-bold text-xs border-b border-gray-400 text-center uppercase">
+                   Assessment on Social, Physical and Cultural Development
+                </div>
+                {/* Dynamic Header for Indicators */}
+                <div className="flex font-bold text-[10px] uppercase border-b border-gray-800 bg-gray-50">
+                   <div className="flex-1 p-2 border-r border-gray-600">Observed Indicator</div>
+                   {indicatorRanges.map(range => (
+                       <div key={range.grade} className="w-10 p-2 text-center border-r border-gray-600 last:border-0" title={range.remark}>
+                           {range.grade}
                        </div>
-                       {/* Subjects use the G/S/B grading */}
-                        <div className="w-10 p-2 text-center border-r border-gray-600 flex justify-center items-center">
-                            {grade === 'B' ? '✔' : ''}
-                        </div>
-                        <div className="w-10 p-2 text-center border-r border-gray-600 flex justify-center items-center">
-                            {grade === 'S' ? '✔' : ''}
-                        </div>
-                        <div className="w-10 p-2 text-center flex justify-center items-center">
-                            {grade === 'G' ? '✔' : ''}
-                        </div>
-                   </div>
-               );
-           })}
+                   ))}
+               </div>
 
-           {/* Divider */}
-           <div className="bg-gray-100 p-1 font-bold text-xs border-b border-gray-400 text-center uppercase mt-2">
-               Assessment on Social, Physical and Cultural Development
+               {/* Indicator Rows */}
+               {indicatorsDisplay.map(skill => {
+                   const rating = student.skills?.[skill];
+                   return (
+                        <div key={skill} className="flex border-b border-gray-400 text-xs last:border-0">
+                           <div className="flex-1 p-1 pl-2 border-r border-gray-600 uppercase">{skill}</div>
+                           {indicatorRanges.map(range => (
+                               <div key={range.grade} className="w-10 p-1 text-center border-r border-gray-600 last:border-0 flex justify-center items-center font-bold">
+                                   {rating === range.grade ? '✔' : ''}
+                               </div>
+                           ))}
+                       </div>
+                   );
+               })}
            </div>
-
-           {/* Skills Checklist - Dynamic */}
-           {activeIndicatorsList.map(skill => {
-               const rating = student.skills?.[skill];
-               return (
-                    <div key={skill} className="flex border-b border-gray-400 text-xs last:border-0">
-                       <div className="flex-1 p-1 pl-2 border-r border-gray-600 uppercase">{skill}</div>
-                       <div className="w-10 p-1 text-center border-r border-gray-600 flex justify-center items-center font-bold">
-                           {rating === 'D' ? '✔' : ''}
-                       </div>
-                       <div className="w-10 p-1 text-center border-r border-gray-600 flex justify-center items-center font-bold">
-                           {rating === 'A' ? '✔' : ''}
-                       </div>
-                       <div className="w-10 p-1 text-center flex justify-center items-center font-bold">
-                           {rating === 'A+' ? '✔' : ''}
-                       </div>
-                   </div>
-               );
-           })}
        </div>
 
        {/* Footer Section */}
@@ -320,13 +348,15 @@ const DaycareReportCard: React.FC<DaycareReportCardProps> = ({ student, settings
            </div>
        </div>
 
-       {/* Grading Key Footer */}
-       <div className="mt-4 border-t-2 border-gray-800 pt-2 flex justify-between text-[10px] uppercase font-bold text-gray-600">
-           <div>Scoring Procedure</div>
-           <div>70% to 100% G GOLD (High Proficiency)</div>
-           <div>40% to 69% S SILVER (Sufficient Proficiency)</div>
-           <div>01% to 39% B BRONZE (Approaching Proficiency)</div>
-           <div>Absent O Absent</div>
+       {/* Grading Key Footer - Dynamic based on Core Grading Scale */}
+       <div className="mt-4 border-t-2 border-gray-800 pt-2 flex flex-wrap gap-x-4 justify-between text-[10px] uppercase font-bold text-gray-600">
+           <div>Scoring Procedure:</div>
+           {coreRanges.map(range => (
+               <div key={range.grade}>
+                   {range.min}% - {range.max}% = {range.grade} ({range.remark})
+               </div>
+           ))}
+           <div>Absent = O</div>
        </div>
 
     </div>

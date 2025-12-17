@@ -1,8 +1,8 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { calculateClassStatistics, processStudentData, calculateFacilitatorStats } from './utils';
-import { GlobalSettings, StudentData, Department, Module, SchoolClass } from './types';
-import { RAW_STUDENTS, FACILITATORS, getSubjectsForDepartment, DEFAULT_GRADING_REMARKS, DAYCARE_INDICATORS } from './constants';
+import { GlobalSettings, StudentData, Department, Module, SchoolClass, SystemConfig } from './types';
+import { RAW_STUDENTS, getSubjectsForDepartment, DEFAULT_GRADING_REMARKS, DAYCARE_INDICATORS, EC_CORE_SCALE_3_POINT, INDICATOR_SCALE_3_POINT, MODULES, DEPARTMENT_CLASSES } from './constants';
 import MasterSheet from './components/MasterSheet';
 import DaycareMasterSheet from './components/DaycareMasterSheet';
 import ReportCard from './components/ReportCard';
@@ -10,10 +10,14 @@ import DaycareReportCard from './components/DaycareReportCard';
 import ScoreEntry from './components/ScoreEntry';
 import FacilitatorDashboard from './components/FacilitatorDashboard';
 import GenericModule from './components/GenericModule';
+import AdminDashboard from './components/AdminDashboard';
+import StaffManagement from './components/StaffManagement';
+import PupilManagement from './components/PupilManagement';
 import { supabase } from './supabaseClient';
 
 const DEFAULT_SETTINGS: GlobalSettings = {
   schoolName: "UNITED BAYLOR ACADEMY",
+  schoolLogo: "", // Default empty logo
   examTitle: "2ND MOCK 2025 BROAD SHEET EXAMINATION",
   mockSeries: "2",
   mockAnnouncement: "Please ensure all scores are entered accurately. Section A is out of 40, Section B is out of 60.",
@@ -29,13 +33,69 @@ const DEFAULT_SETTINGS: GlobalSettings = {
   reportDate: new Date().toLocaleDateString(),
   schoolContact: "+233 24 000 0000",
   schoolEmail: "info@unitedbaylor.edu.gh",
-  facilitatorMapping: FACILITATORS, // Initialize with default constants
+  facilitatorMapping: {}, // Cleared hardcoded mapping
   gradingSystemRemarks: DEFAULT_GRADING_REMARKS,
   activeIndicators: DAYCARE_INDICATORS, // Default all active
   customIndicators: [], // Initialize empty
   customSubjects: [], // Initialize empty
   disabledSubjects: [], // Initialize empty
-  staffList: [] // Initialize empty, will populate from mapping if needed or start fresh
+  staffList: [], // Initialize empty
+  staffAttendance: [],
+  staffLeave: [],
+  staffMovement: [],
+  staffMeetings: [],
+  staffWelfare: [],
+  staffTraining: [],
+  fileRegistry: [],
+  exerciseLogs: [], // Initialize empty exercise logs
+  lessonPlans: [], // Initialize empty lesson plans
+  lessonAssessments: [], // Initialize empty lesson assessments
+  academicCalendar: {},
+  admissionQuestionBank: {},
+  // Default Early Childhood Config: 50/50 split, manual entry
+  earlyChildhoodConfig: {
+      useDailyAssessment: false,
+      weightA: 50,
+      weightB: 50
+  },
+  // Default Early Childhood Grading
+  earlyChildhoodGrading: {
+      core: EC_CORE_SCALE_3_POINT,
+      indicators: INDICATOR_SCALE_3_POINT
+  },
+  // Default Promotion Config
+  promotionConfig: {
+      metric: 'Aggregate',
+      cutoffValue: 36, // Worse than 36 is Fail typically
+      minAttendance: 45,
+      exceptionalCutoff: 10
+  }
+};
+
+const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
+    activeRole: 'Admin',
+    roles: [],
+    moduleVisibility: {
+        "Time Table": true,
+        "Academic Calendar": true,
+        "Staff Management": true,
+        "Pupil Management": true,
+        "Assessment": true,
+        "Result Entry": true, 
+        "Lesson Plans": true,
+        "Exercise Assessment": true,
+        "Materials & Logistics": true,
+        "Learner Materials & Booklist": true,
+        "Disciplinary": true,
+        "Special Event Day": true
+    },
+    actionPermissions: {
+        'canEditScores': true,
+        'canSaveData': true,
+        'canPrintReports': true,
+        'canManageStaff': true
+    },
+    bulkUploadTargetClass: null
 };
 
 const DEPARTMENTS: Department[] = [
@@ -47,36 +107,13 @@ const DEPARTMENTS: Department[] = [
   "Junior High School"
 ];
 
-const DEPARTMENT_CLASSES: Record<Department, SchoolClass[]> = {
-  "Daycare": ["D1", "Creche"],
-  "Nursery": ["N1", "N2"],
-  "Kindergarten": ["K1", "K2"],
-  "Lower Basic School": ["Basic 1", "Basic 2", "Basic 3"],
-  "Upper Basic School": ["Basic 4", "Basic 5", "Basic 6"],
-  "Junior High School": ["Basic 7", "Basic 8", "Basic 9"]
-};
-
-const MODULES: Module[] = [
-  "Time Table",
-  "Academic Calendar",
-  "Facilitator List",
-  "Pupil Enrolment",
-  "Assessment",
-  "Lesson Plans",
-  "Exercise Assessment",
-  "Staff Movement",
-  "Materials & Logistics",
-  "Learner Materials & Booklist"
-  // "Disciplinary",
-  // "Special Event Day"
-];
-
 const App: React.FC = () => {
   // Navigation State
   const [activeDept, setActiveDept] = useState<Department>("Junior High School");
   const [activeClass, setActiveClass] = useState<SchoolClass>("Basic 9");
   const [activeStream, setActiveStream] = useState<string>(""); // "", "A", "B", "C"
   const [activeModule, setActiveModule] = useState<Module>("Assessment");
+  const [showAdminDashboard, setShowAdminDashboard] = useState(false);
   
   // Loading State
   const [isLoading, setIsLoading] = useState(true);
@@ -94,13 +131,15 @@ const App: React.FC = () => {
   const [reportViewMode, setReportViewMode] = useState<'master' | 'reports' | 'dashboard' | 'facilitators'>('master');
   
   // Examination Module Sub-Tabs (New feature)
-  const [examSubTab, setExamSubTab] = useState<'timetable' | 'invigilators' | 'results' | 'indicators' | 'subjects' | 'daily_assessment'>('results');
+  // Added lesson_plans and exercise_assessment, Removed invigilators
+  const [examSubTab, setExamSubTab] = useState<'indicators' | 'subjects' | 'daily_assessment' | 'lesson_plans' | 'exercise_assessment' | 'observation_entry'>('subjects');
 
   // Time Table Module Sub-Tabs
-  const [timetableSubTab, setTimetableSubTab] = useState<'class_timetable' | 'analysis'>('class_timetable');
+  const [timetableSubTab, setTimetableSubTab] = useState<'class_timetable' | 'exam_timetable' | 'analysis'>('class_timetable');
 
   // Settings State - Init with defaults, then load
   const [settings, setSettings] = useState<GlobalSettings>(DEFAULT_SETTINGS);
+  const [systemConfig, setSystemConfig] = useState<SystemConfig>(DEFAULT_SYSTEM_CONFIG);
 
   // Student Data State - Central Source of Truth for Enrolment and Scores
   const [students, setStudents] = useState<StudentData[]>([]);
@@ -120,10 +159,15 @@ const App: React.FC = () => {
           .single();
 
         if (settingsData && settingsData.payload) {
-            // Merge defaults in case of new fields
             const loadedSettings = { ...DEFAULT_SETTINGS, ...settingsData.payload };
-            
-            // Logic for staffList migration (if needed from older saves)
+            // Ensure deep merge for new structure
+            if (!loadedSettings.earlyChildhoodGrading) {
+                loadedSettings.earlyChildhoodGrading = DEFAULT_SETTINGS.earlyChildhoodGrading;
+            }
+            if (!loadedSettings.promotionConfig) {
+                loadedSettings.promotionConfig = DEFAULT_SETTINGS.promotionConfig;
+            }
+
             if (!loadedSettings.staffList || loadedSettings.staffList.length === 0) {
                  const generatedStaff: any[] = [];
                  const seenNames = new Set();
@@ -132,8 +176,8 @@ const App: React.FC = () => {
                         generatedStaff.push({
                             id: Date.now().toString() + Math.random(),
                             name: name,
-                            role: 'Subject Teacher',
-                            status: 'Full Time',
+                            role: 'Facilitator',
+                            status: 'Active',
                             subjects: [subj],
                             contact: '',
                             qualification: ''
@@ -149,30 +193,24 @@ const App: React.FC = () => {
                 loadedSettings.staffList = generatedStaff;
             }
             setSettings(loadedSettings);
-        } else if (settingsError && settingsError.code !== 'PGRST116') {
-             // PGRST116 is "Row not found", which is fine for first run
-             console.error("Error fetching settings:", JSON.stringify(settingsError));
         }
 
-        // 2. Fetch Students
+        // 2. Fetch System Config (Admin Settings)
+        // For simplicity in this demo, system config is local state or part of settings, 
+        // but let's assume it resets or is default if not persisted. 
+        // We'll keep it default for now to prevent lockout on refresh.
+
+        // 3. Fetch Students
         const { data: studentsData, error: studentsError } = await supabase
           .from('students')
           .select('payload');
 
         if (studentsData && studentsData.length > 0) {
-            // Map payload back to student objects
             const loadedStudents = studentsData.map((row: any) => row.payload);
             setStudents(loadedStudents);
         } else {
-             if (studentsError && studentsError.code !== 'PGRST116') {
-                console.error("Error fetching students:", JSON.stringify(studentsError));
-             }
-            // First run? Use Raw Constants
-            const initialStudents = RAW_STUDENTS.map(s => ({
-                ...s,
-                scoreDetails: {} 
-            }));
-            setStudents(initialStudents);
+            // Start with empty list to ensure no hardcoded data leaks through
+            setStudents([]);
         }
       } catch (err: any) {
           console.error("Unexpected error loading data:", err);
@@ -216,20 +254,23 @@ const App: React.FC = () => {
   }, [activeDept, activeClass]);
 
   const handleSettingChange = (key: keyof GlobalSettings, value: any) => {
+    if (!systemConfig.actionPermissions['canEditScores']) return; // Using similar permission for settings
     setSettings(prev => ({ ...prev, [key]: value }));
   };
 
   const handleSave = async () => {
+    if (!systemConfig.actionPermissions['canSaveData']) {
+        alert("Saving data is currently disabled by Admin.");
+        return;
+    }
     setIsLoading(true);
     try {
-        // 1. Save Settings
         const { error: settingsError } = await supabase
             .from('settings')
             .upsert({ id: 1, payload: settings });
         
         if (settingsError) throw settingsError;
 
-        // 2. Save Students
         const studentRows = students.map(s => ({
             id: s.id,
             payload: s
@@ -244,14 +285,22 @@ const App: React.FC = () => {
         alert("Data saved successfully to Supabase!");
     } catch (err: any) {
         console.error("Save error details:", JSON.stringify(err));
-        alert(`Error saving data: ${err.message || "Unknown error (check console)"}`);
+        alert(`Error saving data: ${err.message || "Unknown error"}`);
     } finally {
         setIsLoading(false);
     }
   };
 
+  const handleSystemReset = async () => {
+      setStudents([]);
+      setSettings(DEFAULT_SETTINGS);
+      // Optional: Clear Supabase
+      alert("System has been reset to factory defaults. All local data cleared.");
+  };
+
   // Sync function passed to Report Cards
   const handleStudentUpdate = (id: number, field: keyof StudentData, value: any) => {
+    if (!systemConfig.actionPermissions['canEditScores']) return;
     setStudents(prev => prev.map(s => {
       if (s.id === id) {
         return { ...s, [field]: value };
@@ -273,28 +322,34 @@ const App: React.FC = () => {
       const custom = settings.customSubjects || [];
       const disabled = settings.disabledSubjects || [];
       
-      // Filter out disabled standard subjects
-      const activeStandard = subjects.filter(s => !disabled.includes(s));
+      // Merge standard and custom, then filter out any that are disabled
+      const allPossibleSubjects = [...subjects, ...custom];
+      const uniqueSubjects = Array.from(new Set(allPossibleSubjects));
       
-      let list = [...activeStandard, ...custom];
+      let list = uniqueSubjects.filter(s => !disabled.includes(s));
 
+      // For Early Childhood, append indicators to the subject list for processing
       if (isEarlyChildhood) {
-          // Include active indicators in the "Subject List" for dropdown purposes if in daycare/nursery/KG
           const indicators = settings.activeIndicators || [];
-          list = [...list, ...indicators];
+          // Ensure indicators don't duplicate if they happen to share a name (unlikely but safe)
+          const listSet = new Set(list);
+          const uniqueIndicators = indicators.filter(i => !listSet.has(i));
+          list = [...list, ...uniqueIndicators];
       }
       return list;
   }, [activeDept, isEarlyChildhood, settings.activeIndicators, settings.customSubjects, settings.disabledSubjects]);
 
-  // Calculate stats and process data
+  // Filter students for Main App modules (Assessment, Reports, etc.)
+  // Only show students who have a generatedId (fully enrolled/admitted)
+  const enrolledStudents = useMemo(() => {
+      return students.filter(s => !!s.admissionInfo?.generatedId);
+  }, [students]);
+
+  // Calculate stats and process data (using filtered enrolled list)
   const { stats, processedStudents, classAvgAggregate, facilitatorStats } = useMemo(() => {
-    // For calculating stats, we should only consider core learning areas, not indicators if they are in the list.
-    // However, the function handles arbitrary keys.
-    const s = calculateClassStatistics(students, currentSubjectList);
-    const processed = processStudentData(s, students, settings.facilitatorMapping || {}, currentSubjectList, settings.gradingSystemRemarks, settings.staffList);
-    
+    const s = calculateClassStatistics(enrolledStudents, currentSubjectList);
+    const processed = processStudentData(s, enrolledStudents, settings.facilitatorMapping || {}, currentSubjectList, settings.gradingSystemRemarks, settings.staffList);
     const avgAgg = processed.length > 0 ? processed.reduce((sum, st) => sum + st.bestSixAggregate, 0) / processed.length : 0;
-    
     const fStats = calculateFacilitatorStats(processed);
 
     return { 
@@ -303,51 +358,56 @@ const App: React.FC = () => {
       classAvgAggregate: avgAgg,
       facilitatorStats: fStats
     };
-  }, [students, settings.facilitatorMapping, currentSubjectList, settings.gradingSystemRemarks, settings.staffList]);
+  }, [enrolledStudents, settings.facilitatorMapping, currentSubjectList, settings.gradingSystemRemarks, settings.staffList]);
 
   const handlePrint = () => {
+    if (!systemConfig.actionPermissions['canPrintReports']) {
+        alert("Printing is disabled.");
+        return;
+    }
     window.print();
   };
 
-  // Logic to determine if we show the Reporting System
   const isExamDept = true; 
-  const showReportingSystem = isExamDept && activeModule === "Assessment" && examSubTab === "results";
-  const showGenericModule = !showReportingSystem;
-
   // Logic for Module Name passing to GenericModule
   const getGenericModuleName = () => {
       if (activeModule === 'Assessment') {
-          if (examSubTab === 'timetable') {
-              if (activeDept === 'Kindergarten') return 'Examination Schedule' as any;
-              // Only Daycare and Nursery use Observation labels
-              return isObservationDept ? 'Observation Schedule' as any : 'Examination Time Table' as any;
-          }
-          if (examSubTab === 'invigilators') {
-              if (isObservationDept) return 'Observers List' as any;
-              if (activeDept === 'Kindergarten') return 'Observers List' as any;
-              return 'Invigilators List' as any;
-          }
+          // Note: invigilators tab removed
           if (examSubTab === 'indicators') {
-              return 'Indicators List' as any; // Custom internal name
+              return 'Indicators List' as any; 
           }
           if (examSubTab === 'subjects') {
-              // Rename for Early Childhood
+              // Changed name per user request for Early Childhood
               return isEarlyChildhood ? 'Learning Area / Subject' as any : 'Subject List' as any;
           }
           if (examSubTab === 'daily_assessment') {
               return isBasicOrJHS ? 'School Based Assessment (SBA)' as any : 'Daily Assessment' as any;
           }
+          if (examSubTab === 'lesson_plans') {
+              return 'Lesson Plans';
+          }
+          if (examSubTab === 'exercise_assessment') {
+              return 'Exercise Assessment';
+          }
+          if (examSubTab === 'observation_entry') {
+              return 'Observation of development Indicator';
+          }
       }
       if (activeModule === 'Time Table') {
-          if (timetableSubTab === 'class_timetable') return 'Class Time Table' as any;
+          if (timetableSubTab === 'class_timetable') {
+              // For Daycare, this is the Observation Schedule
+              return isObservationDept ? 'Observation Schedule' as any : 'Class Time Table' as any;
+          }
+          if (timetableSubTab === 'exam_timetable') {
+              if (activeDept === 'Kindergarten') return 'Examination Schedule' as any;
+              return isObservationDept ? 'Observation Schedule' as any : 'Examination Time Table' as any;
+          }
           if (timetableSubTab === 'analysis') return 'Time Table Analysis' as any;
       }
       return activeModule;
   };
 
-  // Determine button labels for Assessment Module
   const timetableLabel = activeDept === 'Kindergarten' ? 'Examination Schedule' : (isObservationDept ? 'Observation Schedule' : 'Examination Time Table');
-  const invigilatorsLabel = (isObservationDept || activeDept === 'Kindergarten') ? 'Observers List' : 'Invigilators List';
   const dailyAssessmentLabel = isBasicOrJHS ? 'School Based Assessment (SBA)' : 'Daily Assessment of Subject Score';
 
   if (isLoading) {
@@ -362,6 +422,32 @@ const App: React.FC = () => {
       );
   }
 
+  // --- ADMIN VIEW ---
+  if (showAdminDashboard) {
+      return (
+          <div className="min-h-screen bg-gray-100 p-4">
+              <button 
+                onClick={() => setShowAdminDashboard(false)} 
+                className="mb-4 bg-gray-600 text-white px-4 py-2 rounded font-bold hover:bg-gray-700 flex items-center gap-2"
+              >
+                  ← Back to System
+              </button>
+              <AdminDashboard 
+                systemConfig={systemConfig} 
+                onConfigChange={setSystemConfig} 
+                onResetSystem={handleSystemReset}
+                modules={MODULES}
+                students={students}
+                setStudents={setStudents}
+                settings={settings}
+                onSettingChange={handleSettingChange}
+                onSave={handleSave}
+              />
+          </div>
+      );
+  }
+
+  // --- STANDARD APP VIEW ---
   return (
     <div className="min-h-screen bg-gray-100 font-sans flex flex-col">
       {/* 1. Top Level: Department Navigation */}
@@ -387,9 +473,14 @@ const App: React.FC = () => {
                     </button>
                 ))}
             </div>
-             <div className="flex gap-2">
-                 <button onClick={handleSave} className="text-yellow-400 hover:text-yellow-300" title="Save All Data">
-                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1-2-2v-4"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+             <div className="flex gap-2 items-center">
+                 {systemConfig.actionPermissions['canSaveData'] && (
+                     <button onClick={handleSave} className="text-yellow-400 hover:text-yellow-300" title="Save All Data">
+                         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1-2-2v-4"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+                     </button>
+                 )}
+                 <button onClick={() => setShowAdminDashboard(true)} className="bg-red-600 hover:bg-red-700 text-white text-xs px-2 py-1 rounded font-bold uppercase">
+                     Admin
                  </button>
             </div>
           </div>
@@ -427,11 +518,11 @@ const App: React.FC = () => {
           </div>
       </div>
 
-      {/* 3. Third Level: Module Navigation */}
+      {/* 3. Third Level: Module Navigation (Filtered by Permissions) */}
       <div className="no-print bg-white border-b border-gray-200 shadow-sm sticky top-0 z-40">
           <div className="px-4 py-2 flex gap-4 overflow-x-auto items-center">
               <span className="text-xs font-bold uppercase text-gray-400">Modules:</span>
-              {MODULES.map(mod => (
+              {MODULES.filter(m => systemConfig.moduleVisibility[m] !== false).map(mod => (
                   <button
                     key={mod}
                     onClick={() => setActiveModule(mod)}
@@ -447,28 +538,24 @@ const App: React.FC = () => {
           </div>
       </div>
 
-      {/* 4. Sub-Module Navigation for Assessment */}
+      {/* 4. Sub-Module Navigation */}
       {isExamDept && activeModule === 'Assessment' && (
           <div className="no-print bg-gray-50 border-b border-gray-200 px-4 py-2 flex gap-4 justify-center flex-wrap">
-             <button
-                onClick={() => setExamSubTab('timetable')}
-                className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${examSubTab === 'timetable' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
-             >
-                {timetableLabel}
-             </button>
-             <button
-                onClick={() => setExamSubTab('invigilators')}
-                className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${examSubTab === 'invigilators' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
-             >
-                {invigilatorsLabel}
-             </button>
              {isEarlyChildhood && (
-                 <button
-                    onClick={() => setExamSubTab('indicators')}
-                    className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${examSubTab === 'indicators' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
-                >
-                    Indicators List
-                </button>
+                 <>
+                    <button
+                        onClick={() => setExamSubTab('indicators')}
+                        className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${examSubTab === 'indicators' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
+                    >
+                        Indicators List
+                    </button>
+                    <button
+                        onClick={() => setExamSubTab('observation_entry')}
+                        className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${examSubTab === 'observation_entry' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
+                    >
+                        Observation Entry
+                    </button>
+                 </>
              )}
              <button
                 onClick={() => setExamSubTab('subjects')}
@@ -483,10 +570,16 @@ const App: React.FC = () => {
                 {dailyAssessmentLabel}
              </button>
              <button
-                onClick={() => setExamSubTab('results')}
-                className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${examSubTab === 'results' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
+                onClick={() => setExamSubTab('lesson_plans')}
+                className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${examSubTab === 'lesson_plans' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
              >
-                Result Entry System
+                Lesson Plans
+             </button>
+             <button
+                onClick={() => setExamSubTab('exercise_assessment')}
+                className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${examSubTab === 'exercise_assessment' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
+             >
+                Exercise Assessment
              </button>
           </div>
       )}
@@ -498,8 +591,19 @@ const App: React.FC = () => {
                 onClick={() => setTimetableSubTab('class_timetable')}
                 className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${timetableSubTab === 'class_timetable' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
              >
-                Class Time Table
+                {/* Dynamic Label based on Dept context for the primary tab */}
+                {isObservationDept ? 'Observation Schedule' : 'Class Time Table'}
              </button>
+             
+             {!isObservationDept && (
+                 <button
+                    onClick={() => setTimetableSubTab('exam_timetable')}
+                    className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${timetableSubTab === 'exam_timetable' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
+                 >
+                    {timetableLabel}
+                 </button>
+             )}
+             
              <button
                 onClick={() => setTimetableSubTab('analysis')}
                 className={`pb-1 px-4 font-bold text-sm border-b-2 transition-colors ${timetableSubTab === 'analysis' ? 'border-blue-600 text-blue-900' : 'border-transparent text-gray-500 hover:text-blue-600'}`}
@@ -510,7 +614,31 @@ const App: React.FC = () => {
       )}
 
       {/* 5. Main Content Area */}
-      {showReportingSystem ? (
+      
+      {/* --- STAFF MANAGEMENT --- */}
+      {activeModule === 'Staff Management' ? (
+          <StaffManagement 
+             settings={settings}
+             onSettingChange={handleSettingChange}
+             onSave={handleSave}
+             department={activeDept}
+          />
+      ) 
+      /* --- PUPIL MANAGEMENT (Receives ALL students including applicants) --- */
+      : activeModule === 'Pupil Management' ? (
+          <PupilManagement 
+             students={students}
+             setStudents={setStudents}
+             settings={settings}
+             onSettingChange={handleSettingChange}
+             onSave={handleSave}
+             systemConfig={systemConfig}
+             onSystemConfigChange={setSystemConfig}
+             isAdmin={false} // Explicitly set to false for standard view
+          />
+      )
+      /* --- RESULT ENTRY (Reports, Master Sheet, Score Entry) - Uses Filtered Enrolled Students --- */
+      : activeModule === 'Result Entry' ? (
         <>
             <div className="no-print bg-blue-50 border-b border-blue-200 p-2 flex justify-between items-center flex-wrap gap-2">
                 <div className="flex items-center gap-4">
@@ -554,13 +682,15 @@ const App: React.FC = () => {
                         <button onClick={() => setZoomLevel(1.0)} className="px-2 text-blue-600 hover:bg-blue-50 border-l ml-1" title="Reset">R</button>
                     </div>
 
-                    <button 
-                        onClick={handlePrint}
-                        className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded font-bold shadow transition text-xs"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2 2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
-                        Print View
-                    </button>
+                    {systemConfig.actionPermissions['canPrintReports'] && (
+                        <button 
+                            onClick={handlePrint}
+                            className="flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded font-bold shadow transition text-xs"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="6 9 6 2 18 2 18 9"></polyline><path d="M6 18H4a2 2 0 0 1-2 2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path><rect x="6" y="14" width="12" height="8"></rect></svg>
+                            Print View
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -627,7 +757,7 @@ const App: React.FC = () => {
 
                     {reportViewMode === 'dashboard' && (
                         <ScoreEntry 
-                            students={students} 
+                            students={enrolledStudents} 
                             setStudents={setStudents}
                             settings={settings}
                             onSettingChange={handleSettingChange}
@@ -644,6 +774,7 @@ const App: React.FC = () => {
                             settings={settings}
                             onSettingChange={handleSettingChange}
                             onSave={handleSave}
+                            subjectList={currentSubjectList}
                         />
                     )}
                 </div>
@@ -657,9 +788,9 @@ const App: React.FC = () => {
                 module={getGenericModuleName()} 
                 settings={settings}
                 onSettingChange={handleSettingChange}
-                students={students} // PASSING STUDENTS DOWN FOR SYNC
-                setStudents={setStudents} // PASSING SETTER DOWN
-                onSave={handleSave} // PASSING SAVE FUNCTION
+                students={enrolledStudents} 
+                setStudents={setStudents} 
+                onSave={handleSave} 
                />
           </div>
       )}

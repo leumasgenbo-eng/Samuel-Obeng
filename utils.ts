@@ -1,6 +1,6 @@
 
-import { CORE_SUBJECTS, DEFAULT_GRADING_REMARKS } from './constants';
-import { ClassStatistics, ProcessedStudent, ComputedSubject, StudentData, FacilitatorStats, StaffMember } from './types';
+import { CORE_SUBJECTS, DEFAULT_GRADING_REMARKS, EC_CORE_SCALE_3_POINT, INDICATOR_SCALE_3_POINT } from './constants';
+import { ClassStatistics, ProcessedStudent, ComputedSubject, StudentData, FacilitatorStats, StaffMember, GradeRange, IndicatorScale, CoreGradingScale } from './types';
 
 export const calculateMean = (values: number[]): number => {
   if (values.length === 0) return 0;
@@ -13,26 +13,36 @@ export const calculateStdDev = (values: number[], mean: number): number => {
   return Math.sqrt(squareDiffs.reduce((a, b) => a + b, 0) / values.length);
 };
 
-// Daycare Grading Helper
-export const getDaycareGrade = (score: number): { grade: string, remark: string } => {
-    if (score >= 70) return { grade: 'G', remark: 'High Level of Proficiency' }; // GOLD
-    if (score >= 40) return { grade: 'S', remark: 'Sufficient Level of Proficiency' }; // SILVER
-    return { grade: 'B', remark: 'Approaching Proficiency' }; // BRONZE
+// Daycare Grading Helper - Dynamic
+export const getDaycareGrade = (score: number, gradingConfig?: CoreGradingScale): { grade: string, remark: string, color?: string } => {
+    const config = gradingConfig || EC_CORE_SCALE_3_POINT;
+    // Find the range that includes the score
+    const found = config.ranges.find(g => score >= g.min && score <= g.max);
+    
+    if (found) {
+        return { grade: found.grade, remark: found.remark, color: found.color };
+    }
+    return { grade: '-', remark: '', color: '' };
 };
 
-// Calculate Indicator Rating from 1-9 Scale Points
-export const getObservationRating = (scores: number[] | undefined): 'D' | 'A' | 'A+' | '' => {
-    if (!scores || scores.length === 0) return '';
+// Calculate Indicator Rating from 1-9 Scale Points - Dynamic
+export const getObservationRating = (scores: number[] | undefined, indicatorConfig?: IndicatorScale): { grade: string, color?: string } => {
+    if (!scores || scores.length === 0) return { grade: '', color: '' };
     const sum = scores.reduce((a, b) => a + b, 0);
     const avg = sum / scores.length;
     
-    // Scale 1-9 mapping
-    // 7-9: Advanced (A+)
-    // 4-6: Achieved (A)
-    // 1-3: Developing (D)
-    if (avg >= 7) return 'A+';
-    if (avg >= 4) return 'A';
-    return 'D'; 
+    const config = indicatorConfig || INDICATOR_SCALE_3_POINT;
+    
+    // Find range
+    const found = config.ranges.find(r => avg >= r.min && avg <= r.max);
+    
+    if (found) {
+        return { grade: found.grade, color: found.color };
+    }
+    
+    // Fallback based on scale type if ranges gap (though unlikely if config is good)
+    if (config.type === '5-point') return { grade: '1', color: '' };
+    return { grade: 'D', color: '' }; 
 };
 
 // Backend Logic for Descriptive Remarks based on Score
@@ -198,11 +208,13 @@ export const processStudentData = (
     const mergedSkills = { ...student.skills };
     if (student.observationScores) {
         Object.entries(student.observationScores).forEach(([indicator, scores]) => {
+            // DO NOT OVERWRITE if already set
             if (!mergedSkills[indicator] && scores.length > 0) {
-                const rating = getObservationRating(scores);
-                if (rating) {
-                    mergedSkills[indicator] = rating;
-                }
+                // We don't have access to indicatorConfig here easily without prop drilling,
+                // so we rely on UI components to do the heavy lifting of displaying correct grade.
+                // However, `processStudentData` is used for export.
+                // Ideally, we shouldn't mutate `skills` here if it's dynamic.
+                // Let's leave `skills` as is (string grade) and handle calculation in UI.
             }
         });
     }

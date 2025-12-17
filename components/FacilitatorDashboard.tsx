@@ -1,7 +1,6 @@
 
 import React, { useState } from 'react';
 import { GlobalSettings, FacilitatorStats } from '../types';
-import { SUBJECT_LIST } from '../constants';
 import EditableField from './EditableField';
 
 interface FacilitatorDashboardProps {
@@ -9,11 +8,15 @@ interface FacilitatorDashboardProps {
   settings: GlobalSettings;
   onSettingChange: (key: keyof GlobalSettings, value: any) => void;
   onSave: () => void;
+  subjectList?: string[]; // Made optional but should be passed
 }
 
-const FacilitatorDashboard: React.FC<FacilitatorDashboardProps> = ({ stats, settings, onSettingChange, onSave }) => {
+const FacilitatorDashboard: React.FC<FacilitatorDashboardProps> = ({ stats, settings, onSettingChange, onSave, subjectList = [] }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const currentMapping = settings.facilitatorMapping || {};
+  
+  // Use passed subject list or fallback to keys in stats if empty (though stats might be empty too)
+  const displaySubjects = subjectList.length > 0 ? subjectList : Object.keys(currentMapping);
 
   const handleNameChange = (subject: string, newName: string) => {
     onSettingChange('facilitatorMapping', {
@@ -173,6 +176,19 @@ const FacilitatorDashboard: React.FC<FacilitatorDashboardProps> = ({ stats, sett
                     placeholder="SCHOOL NAME"
                 />
              </h1>
+             
+             <div className="flex justify-center gap-4 text-xs font-semibold text-gray-600 mb-2">
+                <div className="flex gap-1">
+                    <span>Tel:</span>
+                    <EditableField value={settings.schoolContact} onChange={(v) => onSettingChange('schoolContact', v)} placeholder="000-000-0000" />
+                </div>
+                <span>|</span>
+                <div className="flex gap-1">
+                    <span>Email:</span>
+                    <EditableField value={settings.schoolEmail} onChange={(v) => onSettingChange('schoolEmail', v)} placeholder="school@email.com" />
+                </div>
+            </div>
+
              <h2 className="text-xl font-bold uppercase text-red-700">Facilitator Performance Analysis Report</h2>
              <div className="text-sm font-semibold flex justify-center items-center gap-2 mt-2">
                 <span>{settings.examTitle}</span>
@@ -192,7 +208,7 @@ const FacilitatorDashboard: React.FC<FacilitatorDashboardProps> = ({ stats, sett
             <div className="bg-gray-50 p-4 rounded border">
             <h3 className="text-lg font-bold mb-4 uppercase text-gray-700 border-b pb-2">Facilitator List</h3>
             <div className="space-y-2">
-                {SUBJECT_LIST.map(subject => (
+                {displaySubjects.map(subject => (
                 <div key={subject} className="flex items-center gap-4 bg-white p-2 rounded shadow-sm">
                     <span className="w-1/3 text-sm font-semibold text-gray-800">{subject}</span>
                     <EditableField 
